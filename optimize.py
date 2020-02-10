@@ -1,3 +1,16 @@
+#!/usr/bin/env python
+# -*- encoding: utf-8 -*-
+'''
+@File    :   optimize.py
+@Time    :   2020/02/10 16:55:28
+@Author  :   sk zhao 
+@Version :   1.0
+@Contact :   2396776980@qq.com
+@License :   (C)Copyright 2017-2018, Liugroup-NLPR-CASIA
+@Desc    :   None
+'''
+
+# here put the import lib
 import serial, time, numpy as np
 from scipy import fftpack
 from scipy.optimize import least_squares as ls, curve_fit
@@ -51,10 +64,25 @@ def Collect_Waveform(dictname,kind):
     return decorator
 
 ################################################################################
+### 生数据预处理
+################################################################################
+
+class RowToRipe():
+    def __init__(self):
+        pass
+    def space(self,y):
+        ymean, ymax, ymin = np.mean(y), np.max(y), np.min(y)
+        d = y[np.abs(y-ymean)>0.1*(ymax-ymin)]
+        if len(d) < 0.9*len(y):
+            return len(d) + int(len(y)*0.1)
+        else:
+            return len(y)
+
+################################################################################
 ### 拟合Exp函数
 ################################################################################
 
-class Exp_Fit():
+class Exp_Fit(RowToRipe):
 
     def __init__(self,funcname=None):
         self.funcname = funcname
@@ -74,10 +102,10 @@ class Exp_Fit():
         mask = y > 0
         if self.funcname == 'gauss':
             a = np.polyfit(x[mask], np.log(y[mask]), 2)
-            return [y.max()-y.min(), ymin, np.abs(1/a[1]), np.sqrt(1/np.abs(a[0]))]
+            return [np.exp(a[2]), ymin, np.abs(1/a[1]), np.sqrt(1/np.abs(a[0]))]
         else:
             a = np.polyfit(x[mask], np.log(y[mask]), 1)
-            return [y.max()-y.min(), ymin, np.abs(1/a[0])]
+            return [np.exp(a[1]), ymin, np.abs(1/a[0])]
 
     def fitExp(self,x,s):
         y = np.abs(s)
@@ -89,7 +117,7 @@ class Exp_Fit():
 ### 拟合Cos函数
 ################################################################################
 
-class Cos_Fit():
+class Cos_Fit(RowToRipe):
 
     def __init__(self):
         pass
@@ -121,7 +149,7 @@ class Cos_Fit():
 ### 拟合洛伦兹函数
 ################################################################################
 
-class Lorentz_Fit():
+class Lorentz_Fit(RowToRipe):
 
     def __init__(self):
         pass
@@ -158,11 +186,9 @@ class T2_Fit(Exp_Fit,Cos_Fit):
     '''
     #############
     example:
-
     import imp
     import optimize
     op = imp.reload(optimize)
-
     try: 
         fT2 = op.T2_Fit(funcname='gauss',envelopemethod='hilbert')
         A,B,T1,T2,w,phi = fT2.fitT2(t,y)
@@ -170,7 +196,7 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         pass
     ##############
     '''
-    def __init__(self,responsetime=100,T1=30000,funcname=None,envelopemethod=None):
+    def __init__(self,responsetime=100,T1=25000,funcname=None,envelopemethod=None):
         Exp_Fit.__init__(self,funcname)
         self.responsetime = responsetime
         self.T1 = T1
@@ -196,38 +222,41 @@ class T2_Fit(Exp_Fit,Cos_Fit):
     
     def guessT2(self,x,y_new,y):
  
-        A, B, T1, T2 = self.fitExp(x[10:-10],y_new[10:-10])
-        if np.abs(self.T1-T1)>100000:
+        A, B, T1, T2 = self.fitExp(x[5:-10],y_new[5:-10])
+        if np.abs(self.T1-T1)>5000:
             T1 = self.T1
         Ag, Cg, Wg, phig = self.guessCos(x,y)
-        return A, B, T1, T2, Wg, phig
+        return A, B, 0.5*T1, T2, Wg, phig
 
     def errT2(self,para,x,y):
         A,B,T1,T2,w,phi = para
-        return A*np.exp(-(x/T2)**2-x/T1)*np.cos(2*np.pi*w*x+phi) + B - y
+        return A*np.exp(-(x/T2)**2-x/T1/2)*np.cos(2*np.pi*w*x+phi) + B - y
 
     def fitT2(self,x,y):
+        d = self.space(y)
         if self.envelopemethod == 'hilbert':
             out = self.envelope_Hilbert(y)
         else:
             out = self.envelope(y)
         A,B,T1,T2,w,phi = self.guessT2(x,out,y)
-        #A, B = np.max(y) - np.min(y), np.mean(y)
-        p0 = A,B,T1,T2,w,phi
-        res = ls(self.errT2, p0, args=(np.array(x), np.array(y)))         
+        if T2 > 0.8*x[d-1] and d < 0.8*len(y):
+            T2 = 0.37*x[d-1]
+        p0 = A,B,T1,T2,w,0
+        print(p0)
+        res = ls(self.errT2, p0, args=(x, y))         
         A,B,T1,T2,w,phi = res.x
-        return A,B,T1,T2,w,phi
+        return A,B,T1,T2,w,phi,x[:d-1],out[:d-1]
 
 class Rabi_Fit(T2_Fit):
 
-    def __init__(self,responsetime=100,T1=30000,funcname=None,envelope=None):
+    def __init__(self,responsetime=100,T1=20000,funcname=None,envelope=None):
         T2_Fit.__init__(self,responsetime,T1,funcname,envelope)
 
     
     def guessRabi(self,x,y_new,y):
  
-        A, B, T1 = self.fitExp(x[10:-10],y_new[10:-10])
-        if np.abs(self.T1-T1)>100000:
+        A, B, T1 = self.fitExp(x[5:-10],y_new[5:-10])
+        if np.abs(self.T1-T1)>5000:
             T1 = self.T1
         Ag, Cg, Wg, phig = self.guessCos(x,y)
         return A, B, T1, Wg, phig
@@ -242,8 +271,8 @@ class Rabi_Fit(T2_Fit):
         else:
             out = self.envelope(y)
         A,B,T1,w,phi = self.guessRabi(x,out,y)
-        #A, B = np.max(y) - np.min(y), np.mean(y)
-        p0 = A,B,T1,w,phi
+        A, B = np.max(y) - np.min(y), np.mean(y)
+        p0 = A,B,T1,w,0
         res = ls(self.errRabi, p0, args=(np.array(x), np.array(y)))         
         A,B,T1,w,phi = res.x
         return A,B,T1,w,phi
