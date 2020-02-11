@@ -72,7 +72,7 @@ class RowToRipe():
         pass
     def space(self,y):
         ymean, ymax, ymin = np.mean(y), np.max(y), np.min(y)
-        d = y[np.abs(y-ymean)>0.1*(ymax-ymin)]
+        d = y[np.abs(y-ymean)>0.05*(ymax-ymin)]
         if len(d) < 0.9*len(y):
             return len(d) + int(len(y)*0.1)
         else:
@@ -91,7 +91,7 @@ class Exp_Fit(RowToRipe):
         
         if self.funcname == 'gauss':
             A, B, T1, T2 = paras
-            return A * np.exp(-(x/T2)**2-x/T1) + B - y
+            return A * np.exp(-(x/T2)**2-x/T1/2) + B - y
         else:
             A, B, T1 = paras
             return A * np.exp(-x/T1) + B - y
@@ -102,7 +102,7 @@ class Exp_Fit(RowToRipe):
         mask = y > 0
         if self.funcname == 'gauss':
             a = np.polyfit(x[mask], np.log(y[mask]), 2)
-            return [np.exp(a[2]), ymin, np.abs(1/a[1]), np.sqrt(1/np.abs(a[0]))]
+            return [np.exp(a[2]), ymin, np.abs(1/a[1]/2), np.sqrt(1/np.abs(a[0]))]
         else:
             a = np.polyfit(x[mask], np.log(y[mask]), 1)
             return [np.exp(a[1]), ymin, np.abs(1/a[0])]
@@ -226,7 +226,7 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         if np.abs(self.T1-T1)>5000:
             T1 = self.T1
         Ag, Cg, Wg, phig = self.guessCos(x,y)
-        return A, B, 0.5*T1, T2, Wg, phig
+        return A, B, T1, T2, Wg, phig
 
     def errT2(self,para,x,y):
         A,B,T1,T2,w,phi = para
