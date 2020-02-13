@@ -151,6 +151,7 @@ class Cos_Fit(RowToRipe):
 
 class Lorentz_Fit(RowToRipe):
     '''
+    I hate the large number
     processing x in GHz
     '''
     def __init__(self):
@@ -172,7 +173,7 @@ class Lorentz_Fit(RowToRipe):
 
     def fitLorentz(self,x,y):
         if x[0] / 1e9 > 1:
-            raise 'please divided by 1e9, processing x in GHz'
+            raise 'I hate the large number, please divided by 1e9, processing x in GHz'
         para = self.guessLorentz(x,y)
         res = ls(self.errLorentz,para,args=(x,y))
         a,b,c,d = res.x
