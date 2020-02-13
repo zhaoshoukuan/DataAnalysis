@@ -150,33 +150,33 @@ class Cos_Fit(RowToRipe):
 ################################################################################
 
 class Lorentz_Fit(RowToRipe):
-
+    '''
+    processing x in GHz
+    '''
     def __init__(self):
         pass
 
     def errLorentz(self,para,x,y):
         a,b,c,d = para
-        #y0 = 1.0/(1+((x-b)/(1e-3*Gamma))**2) + Offs
-        return 1.0/(a+c*(x-b)**2)+d-y
+        return a/(1.0+c*(x-b)**2)+d-y
 
     def guessLorentz(self,x,y):
         z = np.sort(np.abs(y))
         d = np.mean(z[:int(len(z)/2)])
         y = np.abs(y)- d
-        cha = np.abs(np.abs(y)-np.abs(y).max() / 2)
         b = x[np.abs(y).argmax()]
-        bw = x[cha.argmin()]-b
-        if np.abs(bw) > 0.5e6:
-            bw = 0.5e6
-        a = 1 / np.abs(y).max()
-        c = a / bw**2
+        bw = (np.max(x[y>0.5*(np.max(y)-np.min(y))])-np.min(x[y>0.5*(np.max(y)-np.min(y))]))/2
+        a = np.abs(y).max()
+        c = 1 / bw**2
         return a,b,c,d
 
     def fitLorentz(self,x,y):
+        if x[0] / 1e9 > 1:
+            raise 'please divided by 1e9, processing x in GHz'
         para = self.guessLorentz(x,y)
         res = ls(self.errLorentz,para,args=(x,y))
         a,b,c,d = res.x
-        return a,b,c,d
+        return a,b,c,d,np.sqrt(np.abs(a/c))*2e3
 
 ################################################################################
 ### 拟合指数包络函数
