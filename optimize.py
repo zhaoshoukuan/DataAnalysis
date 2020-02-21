@@ -77,6 +77,17 @@ class RowToRipe():
             return len(d) + int(len(y)*0.1)
         else:
             return len(y)
+            
+    def deductPhase(self,x,y):
+        if np.ndim(y) != 2:
+            y = [y]
+        s = []
+        for i in y:
+            phi = np.unwrap(np.angle(i), 0.9 * np.pi)
+            phase = np.poly1d(np.polyfit(x, phi, 1))
+            base = i / np.exp(1j * phase(x))
+            s.append(base)
+        return x, np.array(s)
 
 ################################################################################
 ### 拟合Exp函数
@@ -133,16 +144,16 @@ class Cos_Fit(RowToRipe):
         yt  = np.fft.fftshift(np.fft.fftfreq(len(y))) / sample
         amp = np.fft.fftshift(np.fft.fft(y))
         z = np.abs(amp[yt!=0])
-        Wg = np.abs(yt[np.argmax(z)])
+        ytz = yt[yt!=0]
+        Wg = np.abs(ytz[np.argmax(z)])
         phig =  np.mean(np.arccos((y[0] - Cg)/Ag) - Wg*x[0])
         return Ag, Cg, Wg, phig
 
     def fitCos(self,volt,s):
-        x, y = volt, np.abs(s)
+        x, y = volt, s
         Ag, Cg, Wg, phig = self.guessCos(x,y)
         res = ls(self.errCos, [Ag,Cg,Wg,phig], args=(x, y))         
         A, C, W, phi = res.x
-    
         return A, C, W, phi
 
 ################################################################################
