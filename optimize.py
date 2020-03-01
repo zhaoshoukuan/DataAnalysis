@@ -11,39 +11,10 @@
 '''
 
 # here put the import lib
-import serial, time, numpy as np
+import time, numpy as np
 from scipy import fftpack
 from scipy.optimize import least_squares as ls, curve_fit
 import asyncio
-
-################################################################################
-### 设置衰减器
-################################################################################
-
-class Att_Setup():
-    
-    def __init__(self,com):
-        self.com = com
-        ser = serial.Serial(self.com,baudrate=115200, parity='N',bytesize=8, stopbits=1, timeout=1)
-        self.ser = ser
-        if ser.isOpen():    # make sure port is open     
-            print(ser.name + ' open...')
-            ser.write(b'*IDN?\n')
-            x = ser.readline().decode().split('\r''\n')
-            print(x[0])
-            ser.write(b'ATT?\n')
-            y = ser.readline().decode().split('\r''\n')
-            print('ATT',y[0])
-
-    def Att(self,att):
-
-        self.ser.write(b'ATT %f\n'%att)
-        time.sleep(1)
-        self.ser.write(b'ATT?\n')
-
-    def close(self):
-
-        self.ser.close()
 
 ################################################################################
 ### 收集awg波形名字
@@ -77,7 +48,7 @@ class RowToRipe():
             return len(d) + int(len(y)*0.1)
         else:
             return len(y)
-            
+
     def deductPhase(self,x,y):
         if np.ndim(y) != 2:
             y = [y]
@@ -88,6 +59,12 @@ class RowToRipe():
             base = i / np.exp(1j * phase(x))
             s.append(base)
         return x, np.array(s)
+
+    def manipulation(self,volt,freq,s):
+        s_abs = np.abs(s)        
+        min_index = np.argmin(s_abs,axis=1)         
+        x, y = np.array(volt), np.array([freq[j] for j in min_index]) / 1e9 
+        return x,y
 
 ################################################################################
 ### 拟合Exp函数
@@ -151,6 +128,8 @@ class Cos_Fit(RowToRipe):
 
     def fitCos(self,volt,s):
         x, y = volt, s
+        if x[0] / 1e9 > 1:
+            raise 'I hate the large number, please divided by 1e9, processing x in GHz'
         Ag, Cg, Wg, phig = self.guessCos(x,y)
         res = ls(self.errCos, [Ag,Cg,Wg,phig], args=(x, y))         
         A, C, W, phi = res.x
@@ -188,7 +167,7 @@ class Lorentz_Fit(RowToRipe):
         para = self.guessLorentz(x,y)
         res = ls(self.errLorentz,para,args=(x,y))
         a,b,c,d = res.x
-        return a,b,c,d,np.sqrt(np.abs(a/c))*2e3
+        return a,b,c,d,np.sqrt(np.abs(1/c))*2e3,res
 
 ################################################################################
 ### 拟合指数包络函数
@@ -208,10 +187,11 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         pass
     ##############
     '''
-    def __init__(self,responsetime=100,T1=25000,funcname=None,envelopemethod=None):
+    def __init__(self,responsetime=100,T1=35000,phi=0,funcname=None,envelopemethod=None):
         Exp_Fit.__init__(self,funcname)
         self.responsetime = responsetime
         self.T1 = T1
+        self.phi = phi
         self.envelopemethod = envelopemethod
 
     def envelope(self,y):
@@ -234,7 +214,7 @@ class T2_Fit(Exp_Fit,Cos_Fit):
     
     def guessT2(self,x,y_new,y):
  
-        A, B, T1, T2 = self.fitExp(x[5:-10],y_new[5:-10])
+        A, B, T1, T2 = self.fitExp(x[5:-5],y_new[5:-5])
         if np.abs(self.T1-T1)>5000:
             T1 = self.T1
         Ag, Cg, Wg, phig = self.guessCos(x,y)
@@ -245,6 +225,9 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         return A*np.exp(-(x/T2)**2-x/T1/2)*np.cos(2*np.pi*w*x+phi) + B - y
 
     def fitT2(self,x,y):
+        '''
+        几个参数的限制范围还需要考究，A，T1，T2
+        '''
         d = self.space(y)
         if self.envelopemethod == 'hilbert':
             out = self.envelope_Hilbert(y)
@@ -253,17 +236,19 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         A,B,T1,T2,w,phi = self.guessT2(x,out,y)
         if T2 > 0.8*x[d-1] and d < 0.8*len(y):
             T2 = 0.37*x[d-1]
-        p0 = A,B,T1,T2,w,0
+        amp = (np.max(y)-np.min(y)) / 2
+        A = A if np.abs(A-amp) < 0.1*amp else amp
+        p0 = A,B,T1,T2,w,self.phi
         print(p0)
         res = ls(self.errT2, p0, args=(x, y))         
         A,B,T1,T2,w,phi = res.x
-        return A,B,T1,T2,w,phi,x[:d-1],out[:d-1]
+        return A,B,T1,T2,w,phi
 
 class Rabi_Fit(T2_Fit):
 
-    def __init__(self,responsetime=100,T1=20000,funcname=None,envelope=None):
-        T2_Fit.__init__(self,responsetime,T1,funcname,envelope)
-
+    def __init__(self,responsetime=100,T1=20000,phi=np.pi/2,funcname=None,envelope=None):
+        T2_Fit.__init__(self,responsetime,T1,phi,funcname,envelope)
+        
     
     def guessRabi(self,x,y_new,y):
  
@@ -283,8 +268,34 @@ class Rabi_Fit(T2_Fit):
         else:
             out = self.envelope(y)
         A,B,T1,w,phi = self.guessRabi(x,out,y)
-        A, B = np.max(y) - np.min(y), np.mean(y)
-        p0 = A,B,T1,w,0
+        amp = (np.max(y)-np.min(y)) / 2
+        A = A if np.abs(A-amp) < 0.1*amp else amp
+        p0 = A,B,T1,w,self.phi
+        print(p0)
         res = ls(self.errRabi, p0, args=(np.array(x), np.array(y)))         
         A,B,T1,w,phi = res.x
         return A,B,T1,w,phi
+
+################################################################################
+### 拟合二维谱
+################################################################################
+
+class Spec2d_Fit(Cos_Fit):
+
+    def __init__(self,peak=15):
+        self.peak = peak
+    
+    def profile(self,v,f,s,classify=False):
+        if classify:
+            index = np.argwhere(np.abs(s)>self.peak)
+            v = v[index[:,0]]
+            f = f[index[:,1]]
+        else:
+            v = v[np.abs(s).max(axis=1)>self.peak]
+            s = s[np.abs(s).max(axis=1)>self.peak]
+            f = f[np.abs(s).argmax(axis=1)]
+        return v, f
+    def fitSpec2d(self,v,f,s,classify=False):
+        v,f = self.profile(v,f,s,classify)
+        A, C, W, phi = self.fitCos(v,f)
+        return f,v,A, C, W, phi
