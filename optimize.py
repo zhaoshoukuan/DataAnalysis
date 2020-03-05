@@ -13,6 +13,7 @@
 # here put the import lib
 import time, numpy as np
 from scipy import fftpack
+from sklearn.cluster import KMeans
 from scipy.optimize import least_squares as ls, curve_fit
 import asyncio
 
@@ -21,8 +22,7 @@ import asyncio
 ################################################################################
 
 def Collect_Waveform(dictname,kind):
-    if kind in dictname:
-        raise 'kind has already existed'
+    
     def decorator(func):
         def wrapper(*args, **kw):
             if asyncio.iscoroutinefunction(func):
@@ -65,7 +65,20 @@ class RowToRipe():
         min_index = np.argmin(s_abs,axis=1)         
         x, y = np.array(volt), np.array([freq[j] for j in min_index]) / 1e9 
         return x,y
+  
+    def firstMax(self,x,y,num=0):
+        index0 = np.argmin(np.abs(x-num))
+        c = np.argwhere(y>0.9*np.max(y))
+        cdiff = np.diff(c[:,0])
+        n_clusters = len(np.argwhere(cdiff>np.mean(cdiff))) + 1
+        S = c[:,0]
+        d = np.mat(list(zip(S,S)))
 
+        kmeans = KMeans(n_clusters=n_clusters,max_iter=100,tol=0.001)
+        yfit = kmeans.fit_predict(d)
+        index = int(np.mean(S[yfit==yfit[np.argmin(np.abs(S-index0))]]))
+        bias0 = round(x[index],3)
+        return bias0
 ################################################################################
 ### 拟合Exp函数
 ################################################################################
@@ -246,8 +259,8 @@ class T2_Fit(Exp_Fit,Cos_Fit):
 
 class Rabi_Fit(T2_Fit):
 
-    def __init__(self,responsetime=100,T1=20000,phi=np.pi/2,funcname=None,envelope=None):
-        T2_Fit.__init__(self,responsetime,T1,phi,funcname,envelope)
+    def __init__(self,responsetime=100,T1=20000,phi=np.pi/2,funcname=None,envelopemethod=None):
+        T2_Fit.__init__(self,responsetime,T1,phi,funcname,envelopemethod)
         
     
     def guessRabi(self,x,y_new,y):
@@ -270,6 +283,7 @@ class Rabi_Fit(T2_Fit):
         A,B,T1,w,phi = self.guessRabi(x,out,y)
         amp = (np.max(y)-np.min(y)) / 2
         A = A if np.abs(A-amp) < 0.1*amp else amp
+        B = B if np.abs(B-np.mean(y)) < 0.1*np.mean(y) else np.mean(y)
         p0 = A,B,T1,w,self.phi
         print(p0)
         res = ls(self.errRabi, p0, args=(np.array(x), np.array(y)))         
