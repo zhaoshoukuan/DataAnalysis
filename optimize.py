@@ -68,7 +68,7 @@ class RowToRipe():
   
     def firstMax(self,x,y,num=0):
         index0 = np.argmin(np.abs(x-num))
-        c = np.argwhere(y>0.9*np.max(y))
+        c = np.argwhere((y-np.min(y))>0.9*np.max(y-np.min(y)))
         cdiff = np.diff(c[:,0])
         n_clusters = len(np.argwhere(cdiff>np.mean(cdiff))) + 1
         S = c[:,0]
@@ -144,6 +144,7 @@ class Cos_Fit(RowToRipe):
         if x[0] / 1e9 > 1:
             raise 'I hate the large number, please divided by 1e9, processing x in GHz'
         Ag, Cg, Wg, phig = self.guessCos(x,y)
+        print(Ag, Cg, Wg, phig)
         res = ls(self.errCos, [Ag,Cg,Wg,phig], args=(x, y))         
         A, C, W, phi = res.x
         return A, C, W, phi
