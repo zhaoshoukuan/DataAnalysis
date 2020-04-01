@@ -136,7 +136,7 @@ class Cos_Fit(RowToRipe):
         z = np.abs(amp[yt!=0])
         ytz = yt[yt!=0]
         Wg = np.abs(ytz[np.argmax(z)])
-        phig =  np.mean(np.arccos((y[0] - Cg)/Ag) - Wg*x[0])
+        phig =  np.mean(np.arccos((y[0] - Cg)/Ag) - 2*np.pi*Wg*x[0])
         return Ag, Cg, Wg, phig
 
     def fitCos(self,volt,s):
@@ -314,3 +314,32 @@ class Spec2d_Fit(Cos_Fit):
         v,f = self.profile(v,f,s,classify)
         A, C, W, phi = self.fitCos(v,f)
         return f,v,A, C, W, phi
+
+################################################################################
+### crosstalk直线拟合
+################################################################################
+
+class Crosstalk_Fit(Spec2d_Fit):
+
+    def __init__(self,peak=15):
+        self.peak = peak
+
+    def fitCrosstalk(self,v,f,s,classify=False):
+        v,f = self.profile(v,f,s,classify)
+        res = np.polyfit(f,v,1)
+        return v, f, res
+
+################################################################################
+### 单比特tomo
+################################################################################
+
+def pTorho(plist):
+    pz_list, px_list, py_list = plist
+    rho_list = []
+    for i in range(np.shape(pz_list)[0]):
+        pop_z, pop_x, pop_y = pz_list.T[i], px_list.T[i], py_list.T[i]
+        rho_00, rho_01 = 1 - pop_z, (2*pop_x - 2j*pop_y - 1 + 1j) / 2j
+        rho_10, rho_11 = (1 + 1j - 2*pop_x - 2j*pop_y) / 2j, pop_z
+        rho = np.array([[rho_00,rho_01],[rho_10,rho_11]])
+        rho_list.append(rho)
+    pass
