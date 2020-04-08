@@ -66,9 +66,9 @@ class RowToRipe():
         x, y = np.array(volt), np.array([freq[j] for j in min_index]) / 1e9 
         return x,y
   
-    def firstMax(self,x,y,num=0):
+    def firstMax(self,x,y,num=0,peakpercent=0.9):
         index0 = np.argmin(np.abs(x-num))
-        c = np.argwhere((y-np.min(y))>0.9*np.max(y-np.min(y)))
+        c = np.argwhere((y-np.min(y))>peakpercent*np.max(y-np.min(y)))
         cdiff = np.diff(c[:,0])
         n_clusters = len(np.argwhere(cdiff>np.mean(cdiff))) + 1
         S = c[:,0]
