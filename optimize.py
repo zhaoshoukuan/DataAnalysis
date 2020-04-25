@@ -63,12 +63,13 @@ class RowToRipe():
     def manipulation(self,volt,freq,s):
         s_abs = np.abs(s)        
         min_index = np.argmin(s_abs,axis=1)         
-        x, y = np.array(volt), np.array([freq[j] for j in min_index]) / 1e9 
+        x, y = np.array(volt), np.array([freq[j] for j in min_index]) 
         return x,y
   
-    def firstMax(self,x,y,num=0,peakpercent=0.9):
+    def firstMax(self,x,y,num=0,peakpercent=0.9,insitu=False):
         index0 = np.argmin(np.abs(x-num))
-        c = np.argwhere((y-np.min(y))>peakpercent*np.max(y-np.min(y)))
+        peak = peakpercent*(y-np.min(y))[index0] if insitu else peakpercent*np.max(y-np.min(y))
+        c = np.argwhere((y-np.min(y))>peak)
         cdiff = np.diff(c[:,0])
         n_clusters = len(np.argwhere(cdiff>np.mean(cdiff))) + 1
         S = c[:,0]
@@ -343,3 +344,25 @@ def pTorho(plist):
         rho = np.array([[rho_00,rho_01],[rho_10,rho_11]])
         rho_list.append(rho)
     pass
+
+################################################################################
+### RB
+################################################################################
+
+class RB_Fit:
+    def __init__(self):
+        pass
+    def err(self,paras,x,y):
+        A,B,p = paras
+        return A*p**x+B-y
+    def guess(self,x,y):
+        B = np.min(y)
+        y = y - np.min(y)
+        mask = y > 0
+        a = np.polyfit(x[mask], np.log(y[mask]), 1)
+        return np.exp(np.abs(a[1])), B, 1/np.exp(np.abs(a[0]))
+    def fitRB(self,x,y):
+        p0 = self.guess(x,y)
+        res = ls(self.err, p0, args=(x, y)) 
+        A,B,p = res.x
+        return A, B, p
