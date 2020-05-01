@@ -17,6 +17,9 @@ from sklearn.cluster import KMeans
 from scipy.optimize import least_squares as ls, curve_fit, basinhopping as bh
 import asyncio
 
+'''
+主要采用了全局优化的思想进行拟合
+'''
 ################################################################################
 ### 收集awg波形名字
 ################################################################################
