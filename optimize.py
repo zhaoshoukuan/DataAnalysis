@@ -24,22 +24,19 @@ import asyncio
 '''
 
 ################################################################################
-### 收集awg波形名字
+### 拟合参数边界
 ################################################################################
 
-def Collect_Waveform(dictname,kind):
-    
-    def decorator(func):
-        def wrapper(*args, **kw):
-            if asyncio.iscoroutinefunction(func):
-                loop = asyncio.get_event_loop()
-                name_list = loop.run_until_complete(func(*args, **kw))
-                dictname[kind] = name_list
-            else:
-                return func(*args, **kw)
-        return wrapper
-    return decorator
-
+class MyBounds(object):
+    def __init__(self, xmax=[1.1,1.1], xmin=[-1.1,-1.1] ):
+        self.xmax = np.array(xmax)
+        self.xmin = np.array(xmin)
+    def __call__(self, **kwargs):
+        x = kwargs["x_new"]
+        tmax = bool(np.all(x <= self.xmax))
+        tmin = bool(np.all(x >= self.xmin))
+        return tmax and tmin
+        
 ################################################################################
 ### 生数据预处理
 ################################################################################
@@ -263,8 +260,9 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         A = A if np.abs(A-amp) < 0.1*amp else amp
         p0 = A,B,T1,T2,w,self.phi
         print(p0)
-        # res = ls(self.errT2, p0, args=(x, y))     
-        res = bh(self.errT2,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})     
+        # res = ls(self.errT2, p0, args=(x, y)) 
+        mybounds = MyBounds(xmin=[-np.inf,-np.inf,-np.inf,-np.inf,0,0],xmax=[np.inf,np.inf,np.inf,np.inf,1.5*w,2*np.pi])    
+        res = bh(self.errT2,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)     
         A,B,T1,T2,w,phi = res.x
         return A,B,T1,T2,w,phi,env
 
@@ -300,7 +298,8 @@ class Rabi_Fit(T2_Fit):
         p0 = A,B,T1,w,self.phi
         print(p0)
         # res = ls(self.errRabi, p0, args=(np.array(x), np.array(y)))   
-        res = bh(self.errRabi,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})      
+        mybounds = MyBounds(xmin=[-np.inf,-np.inf,-np.inf,0,0],xmax=[np.inf,np.inf,np.inf,1.5*w,2*np.pi])
+        res = bh(self.errRabi,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)      
         A,B,T1,w,phi = res.x
         return A,B,T1,w,phi,env
 
@@ -412,3 +411,11 @@ class TwoExp_Fit(Exp_Fit):
         res = bh(self.err,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
 
         return res.x
+
+################################################################################
+### 真空拉比拟合
+################################################################################
+
+class Vcrabi_fit():
+    def __init__(self):
+        pass
