@@ -71,8 +71,9 @@ class RowToRipe():
   
     def firstMax(self,x,y,num=0,peakpercent=0.9,insitu=False):
         index0 = np.argmin(np.abs(x-num))
-        peak = peakpercent*(y-np.min(y))[index0] if insitu else peakpercent*np.max(y-np.min(y))
-        c = np.argwhere((y-np.min(y))>peak)
+        y = y - np.min(y)
+        peak = peakpercent*y[index0] if insitu else peakpercent*np.max(y)
+        c = np.argwhere(y>peak)
         cdiff = np.diff(c[:,0])
         n_clusters = len(np.argwhere(cdiff>np.mean(cdiff))) + 1
         S = c[:,0]
@@ -83,6 +84,32 @@ class RowToRipe():
         index = int(np.mean(S[yfit==yfit[np.argmin(np.abs(S-index0))]]))
         bias0 = round(x[index],3)
         return bias0
+
+    def fourier(self,x,y):
+        sample = (np.max(x) - np.min(x))/(len(x) - 1)
+        yt  = np.fft.fftshift(np.fft.fftfreq(len(y))) / sample
+        amp = np.fft.fftshift(np.fft.fft(y))
+        w = np.abs(yt[yt!=0][np.argmax(np.abs(amp[yt!=0]))])
+        return w, yt[yt!=0], np.abs(amp[yt!=0])
+        
+    def envelope(self,y):
+        mold, out, rc = 0, [], self.responsetime
+        out.append(np.abs(y[0]))
+        for j, i in enumerate(y[1:],start=1):
+            i = np.abs(i)
+            if i > out[j-1]:
+                mold = i
+            else:
+                mold = (out[j-1] * rc)/(rc + 1)
+            out.append(mold)
+        return out
+
+    def envelope_Hilbert(self,y):
+        ym = y - y.mean()
+        yh = fftpack.hilbert(ym) 
+        out = np.abs(ym + 1j*yh) + y.mean()
+        return out
+
 ################################################################################
 ### 拟合Exp函数
 ################################################################################
@@ -167,7 +194,7 @@ class Lorentz_Fit(RowToRipe):
 
     def errLorentz(self,para,x,y):
         a,b,c,d = para
-        return a/(1.0+c*(x-b)**2)+d-y
+        return np.sum((a/(1.0+c*(x-b)**2)+d-y)**2)
 
     def guessLorentz(self,x,y):
         z = np.sort(np.abs(y))
@@ -183,7 +210,9 @@ class Lorentz_Fit(RowToRipe):
         if x[0] / 1e9 > 1:
             raise 'I hate the large number, please divided by 1e9, processing x in GHz'
         para = self.guessLorentz(x,y)
-        res = ls(self.errLorentz,para,args=(x,y))
+        # mybounds = MyBounds(xmin=[-np.inf,-np.inf,-np.inf,-np.inf,0,0],xmax=[np.inf,np.inf,np.inf,np.inf,1.5*w,2*np.pi])    
+        res = bh(self.errLorentz,para,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
+        # res = ls(self.errLorentz,para,args=(x,y))
         a,b,c,d = res.x
         return a,b,c,d,np.sqrt(np.abs(1/c))*2e3,res
 
@@ -211,24 +240,6 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         self.T1 = T1
         self.phi = phi
         self.envelopemethod = envelopemethod
-
-    def envelope(self,y):
-        mold, out, rc = 0, [], self.responsetime
-        out.append(np.abs(y[0]))
-        for j, i in enumerate(y[1:],start=1):
-            i = np.abs(i)
-            if i > out[j-1]:
-                mold = i
-            else:
-                mold = (out[j-1] * rc)/(rc + 1)
-            out.append(mold)
-        return out
-
-    def envelope_Hilbert(self,y):
-        ym = y - y.mean()
-        yh = fftpack.hilbert(ym) 
-        out = np.abs(ym + 1j*yh) + y.mean()
-        return out
     
     def guessT2(self,x,y_new,y):
  
@@ -261,7 +272,7 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         p0 = A,B,T1,T2,w,self.phi
         print(p0)
         # res = ls(self.errT2, p0, args=(x, y)) 
-        mybounds = MyBounds(xmin=[-np.inf,-np.inf,-np.inf,-np.inf,0,0],xmax=[np.inf,np.inf,np.inf,np.inf,1.5*w,2*np.pi])    
+        mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,0,0,0],xmax=[np.inf,np.inf,100000,100000,1.5*w,2*np.pi])    
         res = bh(self.errT2,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)     
         A,B,T1,T2,w,phi = res.x
         return A,B,T1,T2,w,phi,env
