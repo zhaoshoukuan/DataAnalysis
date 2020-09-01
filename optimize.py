@@ -15,6 +15,7 @@ import time, numpy as np
 from scipy import fftpack
 from sklearn.cluster import KMeans
 from scipy.optimize import least_squares as ls, curve_fit, basinhopping as bh
+from scipy import signal
 import asyncio
 
 '''
@@ -85,6 +86,26 @@ class RowToRipe():
         bias0 = round(x[index],3)
         return bias0
 
+    def smooth(self,y,f0=0.1):
+        b, a = signal.butter(3,f0)
+        z = signal.filtfilt(b,a,y)
+        return z
+
+    def resample(self,x,y,num=1001):
+        down = len(x)
+        up = num
+        x_new = np.linspace(min(x),max(x),up)
+        z = signal.resample_poly(y,up,down,padtype='line')
+        return x_new, z
+
+    def findPeaks(self,y,width=0.02,f0=0.015):
+        z = -y
+        background = self.smooth(z,f0=f0)
+        height = (np.max(z)-np.min(z))
+        property_peaks = signal.find_peaks(z,height=(background+0.2*height,background+1.2*height),width=width)
+        index, prominences = property_peaks[0], property_peaks[1]['prominences']
+        return index, prominences
+
     def fourier(self,x,y):
         sample = (np.max(x) - np.min(x))/(len(x) - 1)
         yt  = np.fft.fftshift(np.fft.fftfreq(len(y))) / sample
@@ -109,6 +130,22 @@ class RowToRipe():
         yh = fftpack.hilbert(ym) 
         out = np.abs(ym + 1j*yh) + y.mean()
         return out
+
+    def profile(self,v,f,s,peak,axis=1,classify=False):
+        if classify:
+            index = np.argwhere(np.abs(s)>peak)
+            v = v[index[:,0]]
+            f = f[index[:,1]]
+        else:
+            if axis == 1:
+                v = v[np.abs(s).max(axis=1)>peak]
+                s = s[np.abs(s).max(axis=1)>peak]
+                f = f[np.abs(s).argmax(axis=1)]
+            if axis == 0:
+                f = f[np.abs(s).max(axis=0)>peak]
+                s = s[:,np.abs(s).max(axis=0)>peak]
+                v = v[np.abs(s).argmax(axis=0)]
+        return v, f
 
 ################################################################################
 ### 拟合Exp函数
@@ -156,7 +193,7 @@ class Cos_Fit(RowToRipe):
 
     def errCos(self,paras,x,y):
         A,C,W,phi = paras             
-        return  A*np.cos(2*np.pi*W*x+phi)+C-y  
+        return  np.sum((A*np.cos(2*np.pi*W*x+phi)+C-y)**2)  
 
     def guessCos(self,x,y):
         x, y = np.array(x), np.array(y)
@@ -175,8 +212,11 @@ class Cos_Fit(RowToRipe):
         if x[0] / 1e9 > 1:
             raise 'I hate the large number, please divided by 1e9, processing x in GHz'
         Ag, Cg, Wg, phig = self.guessCos(x,y)
-        print(Ag, Cg, Wg, phig)
-        res = ls(self.errCos, [Ag,Cg,Wg,phig], args=(x, y))         
+        p0 = Ag, Cg, Wg, phig
+        # print(Ag, Cg, Wg, phig)
+        # res = ls(self.errCos, [Ag,Cg,Wg,phig], args=(x, y)) 
+        mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,-np.pi],xmax=[np.inf,np.inf,1.5*Wg,np.pi])    
+        res = bh(self.errCos,p0,niter=80,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)          
         A, C, W, phi = res.x
         return A, C, W, phi
 
@@ -214,7 +254,7 @@ class Lorentz_Fit(RowToRipe):
         res = bh(self.errLorentz,para,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
         # res = ls(self.errLorentz,para,args=(x,y))
         a,b,c,d = res.x
-        return a,b,c,d,np.sqrt(np.abs(1/c))*2e3,res
+        return a,b,c,d,np.sqrt(np.abs(1/c))*2e3
 
 ################################################################################
 ### 拟合指数包络函数
@@ -272,8 +312,8 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         p0 = A,B,T1,T2,w,self.phi
         print(p0)
         # res = ls(self.errT2, p0, args=(x, y)) 
-        mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,0,0,0],xmax=[np.inf,np.inf,100000,100000,1.5*w,2*np.pi])    
-        res = bh(self.errT2,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)     
+        mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,0,0,-np.pi],xmax=[np.inf,np.inf,100000,10000,1.5*w,np.pi])    
+        res = bh(self.errT2,p0,niter = 80,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)     
         A,B,T1,T2,w,phi = res.x
         return A,B,T1,T2,w,phi,env
 
@@ -309,8 +349,8 @@ class Rabi_Fit(T2_Fit):
         p0 = A,B,T1,w,self.phi
         print(p0)
         # res = ls(self.errRabi, p0, args=(np.array(x), np.array(y)))   
-        mybounds = MyBounds(xmin=[-np.inf,-np.inf,-np.inf,0,0],xmax=[np.inf,np.inf,np.inf,1.5*w,2*np.pi])
-        res = bh(self.errRabi,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)      
+        mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,0,0],xmax=[np.inf,np.inf,100e3,1.5*w,2*np.pi])
+        res = bh(self.errRabi,p0,niter=30,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)      
         A,B,T1,w,phi = res.x
         return A,B,T1,w,phi,env
 
@@ -339,7 +379,8 @@ class Spec2d_Fit(Cos_Fit):
     def fitSpec2d(self,v,f,s,classify=False):
         v,f = self.profile(v,f,s,classify)
         A, C, W, phi = self.fitCos(v,f)
-        res = bh(self.err,[A,C,2*W,phi],niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)}) 
+        mybounds = MyBounds(xmin=[0,-np.inf,0,0],xmax=[15*np.abs(A),np.inf,2.5*W,2*np.pi])
+        res = bh(self.err,[np.abs(A),C,2*W,phi],niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
         A, C, W, phi = res.x
         return f,v,A, C, W, phi
 
@@ -424,9 +465,77 @@ class TwoExp_Fit(Exp_Fit):
         return res.x
 
 ################################################################################
-### 真空拉比拟合
+## 真空拉比拟合
 ################################################################################
 
 class Vcrabi_fit():
     def __init__(self):
         pass
+    def err(self,paras,x,y):
+        g, A0, Z0 = paras
+        return np.sum((np.sqrt(4*(g/2/np.pi)**2+A0**2*(x-Z0)**2)-y)**2)
+    def guess(self,x,y):
+        Z0 = x[np.argmin(y)]
+        g = np.min(y)*np.pi
+        x, y = x[x!=Z0], y[x!=Z0]
+        A0 = np.mean(np.sqrt(y**2-4*(g/2/np.pi)**2)/(x-Z0))
+        return g, A0, Z0
+    def fitVcrabi(self,x,y):
+        p0 = self.guess(x,y)
+        print(p0)
+        res = bh(self.err,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
+        return res.x
+
+################################################################################
+## 拟合Q值
+################################################################################
+
+class Cavity_fit(RowToRipe):
+    def __init__(self):
+        pass
+
+    def circleLeastFit(self,x, y):
+        def circle_err(params, x, y):
+            xc, yc, R = params
+            return (x - xc)**2 + (y - yc)**2 - R**2
+
+        p0 = [
+            x.mean(),
+            y.mean(),
+            np.sqrt(((x - x.mean())**2 + (y - y.mean())**2).mean())
+        ]
+        res = ls(circle_err, p0, args=(x, y))
+        return res.x
+
+    def guessParams(self,x,s):
+        
+        y = np.abs(1 / s)
+        f0 = x[y.argmax()]
+        _bw = x[y > 0.5 * (y.max() + y.min())]
+        FWHM = np.max(_bw) - np.min(_bw)
+        Qi = f0 / FWHM
+        _, _, R = self.circleLeastFit(np.real(1 / s), np.imag(1 / s))
+        Qe = Qi / (2 * R)
+        QL = 1 / (1 / Qi + 1 / Qe)
+
+        return [f0, Qi, Qe, 0, QL]
+
+    def invS21(self, f, f0, Qi, Qe, phi):
+        #QL = 1/(1/Qi+1/Qe)
+        return 1 + (Qi / Qe * np.exp(1j * phi)) / (
+            1 + 2j * Qi * (np.abs(f) / np.abs(f0) - 1))
+    
+    def err(self,params,f,s21):
+        f0, Qi, Qe, phi = params
+        y = np.abs(s21) - np.abs(self.invS21(f, f0, Qi, Qe, phi) )
+        return np.sum(np.abs(y)**2)
+
+    def fitCavity(self,x,y):
+        f, s = self.deductPhase(x,y)
+        s = s[0]/np.max(np.abs(s[0]))
+        f0, Qi, Qe, phi, QL = self.guessParams(f,s)
+        res = bh(self.err,(f0, Qi, Qe, phi),niter = 100,\
+            minimizer_kwargs={"method":"Nelder-Mead","args":(f, 1/s)}) 
+        f0, Qi, Qe, phi = res.x
+        QL = 1 / (1 / Qi + 1 / Qe)
+        return f0, Qi, Qe, QL, phi, f, s
