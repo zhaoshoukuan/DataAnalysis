@@ -105,6 +105,39 @@ class RowToRipe():
         property_peaks = signal.find_peaks(z,height=(background+0.2*height,background+1.2*height),width=width)
         index, prominences = property_peaks[0], property_peaks[1]['prominences']
         return index, prominences
+    
+    def spectrum(self,x,y,method='normal',window='boxcar',detrend='constant',axis=-1,scaling='density',average='mean'):
+        '''
+        scaling:
+            'density':power spectral density V**2/Hz
+            'spcetrum': power spectrum V**2
+        '''
+        fs = (len(x)-1)/(np.max(x)-np.min(x))
+        if method == 'normal':
+            f, Pxx = signal.periodogram(y,fs,window=window,detrend=detrend,axis=axis,scaling=scaling)
+        if method == 'welch':
+            f, Pxx = signal.welch(y,fs,window=window,detrend=detrend,axis=axis,scaling=scaling,average=average)
+        return f, Pxx
+    
+    def cross_psd(self,x,y,z):
+        fs = (len(x)-1)/(np.max(x)-np.min(x))
+        f, Pxy = signal.csd(y,z,fs)
+        return f, Pxy
+    
+    def ftspectrum(self,x,y):
+        fs = (len(x)-1)/(np.max(x)-np.min(x))
+        f, t, Sxx = signal.spectrigram(y,fs)
+        return f, t, Sxx
+    
+    def stft(self,x,y):
+        fs = (len(x)-1)/(np.max(x)-np.min(x))
+        f, t, Zxx = signal.stft(y,fs)
+        retrun f, t, Zxx
+     
+    def istft(self,x,Zxx):
+        fs = (len(x)-1)/(np.max(x)-np.min(x))
+        t, y = signal.stft(Zxx,fs)
+        retrun t, y
 
     def fourier(self,x,y):
         sample = (np.max(x) - np.min(x))/(len(x) - 1)
