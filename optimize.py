@@ -119,24 +119,36 @@ class RowToRipe():
             f, Pxx = signal.welch(y,fs,window=window,detrend=detrend,axis=axis,scaling=scaling,average=average)
         return f, Pxx
     
-    def cross_psd(self,x,y,z):
+    def cross_psd(self,x,y,z,window='hann',detrend='constant',scaling='density',axis=-1,average='mean'):
         fs = (len(x)-1)/(np.max(x)-np.min(x))
-        f, Pxy = signal.csd(y,z,fs)
+        f, Pxy = signal.csd(y,z,fs,window=window,detrend=detrend,scaling=scaling,axis=axis,average=average)
         return f, Pxy
     
-    def ftspectrum(self,x,y):
+    def ftspectrum(self,x,y,window='hann',detrend='constant',scaling='density',axis=-1,mode='psd'):
+        '''
+        mode:
+            'psd':
+            'complex':==stft
+            'magnitude':==abs(stft)
+            'angle':with unwrapping
+            'phase':without unwraping
+        '''
         fs = (len(x)-1)/(np.max(x)-np.min(x))
-        f, t, Sxx = signal.spectrigram(y,fs)
+        f, t, Sxx = signal.spectrigram(y,fs,window=window,detrend=detrend,scaling=scaling,axis=axis,mode=mode)
         return f, t, Sxx
     
-    def stft(self,x,y):
+    def stft(self,x,y,window='hann',detrend=False,axis=-1,boundary='zeros',padded=True):
+        '''
+        boundary:you can choose ['even','odd','constant','zeros',None]
+        padded: True Or False          
+        '''
         fs = (len(x)-1)/(np.max(x)-np.min(x))
-        f, t, Zxx = signal.stft(y,fs)
+        f, t, Zxx = signal.stft(y,fs,window=window,detrend=detrend,axis=axis,boundary=boundary,padded=padded)
         retrun f, t, Zxx
      
-    def istft(self,x,Zxx):
+    def istft(self,x,Zxx,window='hann',boundary=True,time_axis=-1,freq_axis=-2):
         fs = (len(x)-1)/(np.max(x)-np.min(x))
-        t, y = signal.stft(Zxx,fs)
+        t, y = signal.stft(Zxx,fs,window=window,boundary=boundary,time_axis=time_axis,freq_axis=freq_axis)
         retrun t, y
 
     def fourier(self,x,y):
