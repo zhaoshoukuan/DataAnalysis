@@ -528,10 +528,14 @@ class Vcrabi_fit(RowToRipe):
     def fitVcrabi(self,x,y,z,axis=-1):
         if axis == -1:
             xaxis = y
+            yaxis = x
         else:
             xaxis = x
+            yaxis = y
         f, Pxx = self.spectrum(xaxis,z,method='welch',axis=axis)
-        p0 = self.guess(x,y)
+        index = np.argmax(Pxx,axis=axis)
+        xaxis_new = xaxis[index]
+        p0 = self.guess(yaxis,xaxis_new)
         print(p0)
         res = bh(self.err,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
         return res.x
