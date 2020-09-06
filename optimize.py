@@ -513,7 +513,7 @@ class TwoExp_Fit(Exp_Fit):
 ## 真空拉比拟合
 ################################################################################
 
-class Vcrabi_fit():
+class Vcrabi_fit(RowToRipe):
     def __init__(self):
         pass
     def err(self,paras,x,y):
@@ -525,7 +525,12 @@ class Vcrabi_fit():
         x, y = x[x!=Z0], y[x!=Z0]
         A0 = np.mean(np.sqrt(y**2-4*(g/2/np.pi)**2)/(x-Z0))
         return g, A0, Z0
-    def fitVcrabi(self,x,y):
+    def fitVcrabi(self,x,y,z,axis=-1):
+        if axis == -1:
+            xaxis = y
+        else:
+            xaxis = x
+        f, Pxx = self.spectrum(xaxis,z,method='welch',axis=axis)
         p0 = self.guess(x,y)
         print(p0)
         res = bh(self.err,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
