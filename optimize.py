@@ -106,7 +106,7 @@ class RowToRipe():
         index, prominences = property_peaks[0], property_peaks[1]['prominences']
         return index, prominences
     
-    def spectrum(self,x,y,method='normal',window='boxcar',detrend='constant',axis=-1,scaling='density',average='mean'):
+    def spectrum(self,x,y,method='normal',window='boxcar',detrend='constant',axis=-1,scaling='density',average='mean',shift=True):
         '''
         scaling:
             'density':power spectral density V**2/Hz
@@ -117,6 +117,7 @@ class RowToRipe():
             f, Pxx = signal.periodogram(y,fs,window=window,detrend=detrend,axis=axis,scaling=scaling)
         if method == 'welch':
             f, Pxx = signal.welch(y,fs,window=window,detrend=detrend,axis=axis,scaling=scaling,average=average)
+        f, Pxx = (np.fft.fftshift(f), np.fft.fftshift(Pxx)) if shift else (f, Pxx)
         return f, Pxx
     
     def cross_psd(self,x,y,z,window='hann',detrend='constant',scaling='density',axis=-1,average='mean'):
@@ -144,12 +145,13 @@ class RowToRipe():
         '''
         fs = (len(x)-1)/(np.max(x)-np.min(x))
         f, t, Zxx = signal.stft(y,fs,window=window,detrend=detrend,axis=axis,boundary=boundary,padded=padded)
-        retrun f, t, Zxx
+        return f, t, Zxx
      
     def istft(self,x,Zxx,window='hann',boundary=True,time_axis=-1,freq_axis=-2):
         fs = (len(x)-1)/(np.max(x)-np.min(x))
         t, y = signal.stft(Zxx,fs,window=window,boundary=boundary,time_axis=time_axis,freq_axis=freq_axis)
-        retrun t, y
+        return t, y
+
 
     def fourier(self,x,y):
         sample = (np.max(x) - np.min(x))/(len(x) - 1)
@@ -357,7 +359,7 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         p0 = A,B,T1,T2,w,self.phi
         print(p0)
         # res = ls(self.errT2, p0, args=(x, y)) 
-        mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,0,0,-np.pi],xmax=[np.inf,np.inf,100000,10000,1.5*w,np.pi])    
+        mybounds = MyBounds(xmin=[0,-np.inf,100,10,0,-np.pi],xmax=[np.inf,np.inf,100000,100000,1.5*w,np.pi])    
         res = bh(self.errT2,p0,niter = 80,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)     
         A,B,T1,T2,w,phi = res.x
         return A,B,T1,T2,w,phi,env
@@ -394,7 +396,7 @@ class Rabi_Fit(T2_Fit):
         p0 = A,B,T1,w,self.phi
         print(p0)
         # res = ls(self.errRabi, p0, args=(np.array(x), np.array(y)))   
-        mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,0,0],xmax=[np.inf,np.inf,100e3,1.5*w,2*np.pi])
+        mybounds = MyBounds(xmin=[0,-np.inf,100,0,0],xmax=[np.inf,np.inf,100e3,1.5*w,2*np.pi])
         res = bh(self.errRabi,p0,niter=30,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)      
         A,B,T1,w,phi = res.x
         return A,B,T1,w,phi,env
@@ -410,21 +412,23 @@ class Spec2d_Fit(Cos_Fit):
     
     def profile(self,v,f,s,classify=False):
         if classify:
-            index = np.argwhere(np.abs(s)>self.peak)
+            index = np.argwhere(s>self.peak)
             v = v[index[:,0]]
             f = f[index[:,1]]
         else:
-            v = v[np.abs(s).max(axis=1)>self.peak]
-            s = s[np.abs(s).max(axis=1)>self.peak]
-            f = f[np.abs(s).argmax(axis=1)]
+            v = v[s.max(axis=1)>self.peak]
+            s = s[s.max(axis=1)>self.peak]
+            f = f[s.argmax(axis=1)]
         return v, f
     def err(self,paras,x,y):
         A, C, w, phi = paras
         return np.sum((np.sqrt(A*np.abs(np.cos(w*x+phi))) + C - y)**2)
     def fitSpec2d(self,v,f,s,classify=False):
         v,f = self.profile(v,f,s,classify)
+        
         A, C, W, phi = self.fitCos(v,f)
-        mybounds = MyBounds(xmin=[0,-np.inf,0,0],xmax=[15*np.abs(A),np.inf,2.5*W,2*np.pi])
+        print(A, C, W, phi)
+        mybounds = MyBounds(xmin=[0,0,0,0],xmax=[15*np.abs(A),np.inf,2.5*W,2*np.pi])
         res = bh(self.err,[np.abs(A),C,2*W,phi],niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
         A, C, W, phi = res.x
         return f,v,A, C, W, phi
@@ -513,7 +517,7 @@ class TwoExp_Fit(Exp_Fit):
 ## 真空拉比拟合
 ################################################################################
 
-class Vcrabi_fit(RowToRipe):
+class Vcrabi_fit():
     def __init__(self):
         pass
     def err(self,paras,x,y):
@@ -525,17 +529,8 @@ class Vcrabi_fit(RowToRipe):
         x, y = x[x!=Z0], y[x!=Z0]
         A0 = np.mean(np.sqrt(y**2-4*(g/2/np.pi)**2)/(x-Z0))
         return g, A0, Z0
-    def fitVcrabi(self,x,y,z,axis=-1):
-        if axis == -1:
-            xaxis = y
-            yaxis = x
-        else:
-            xaxis = x
-            yaxis = y
-        f, Pxx = self.spectrum(xaxis,z,method='welch',axis=axis)
-        index = np.argmax(Pxx,axis=axis)
-        xaxis_new = xaxis[index]
-        p0 = self.guess(yaxis,xaxis_new)
+    def fitVcrabi(self,x,y):
+        p0 = self.guess(x,y)
         print(p0)
         res = bh(self.err,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
         return res.x
