@@ -83,7 +83,7 @@ class RowToRipe():
         kmeans = KMeans(n_clusters=n_clusters,max_iter=100,tol=0.001)
         yfit = kmeans.fit_predict(d)
         index = int(np.mean(S[yfit==yfit[np.argmin(np.abs(S-index0))]]))
-        bias0 = round(x[index],3)
+        bias0 = round(x[index],5)
         return bias0
 
     def smooth(self,y,f0=0.1):
@@ -98,11 +98,13 @@ class RowToRipe():
         z = signal.resample_poly(y,up,down,padtype='line')
         return x_new, z
 
-    def findPeaks(self,y,width=0.02,f0=0.015):
+    def findPeaks(self,y,width=0.02,f0=0.015,h=0.15,thresholf=None):
         z = -y
         background = self.smooth(z,f0=f0)
         height = (np.max(z)-np.min(z))
-        property_peaks = signal.find_peaks(z,height=(background+0.2*height,background+1.2*height),width=width)
+        height = (background+h*height,background+(1+h)*height)
+        threshold = threshold if threhold == None else threshold*height
+        property_peaks = signal.find_peaks(z,height=height,width=width,threshold=threshold)
         index, prominences = property_peaks[0], property_peaks[1]['prominences']
         return index, prominences
     
@@ -421,17 +423,54 @@ class Spec2d_Fit(Cos_Fit):
             f = f[s.argmax(axis=1)]
         return v, f
     def err(self,paras,x,y):
-        A, C, w, phi = paras
-        return np.sum((np.sqrt(A*np.abs(np.cos(w*x+phi))) + C - y)**2)
+        # A, C, w, phi = paras
+        # f01 = np.sqrt(A*np.abs(np.cos(w*x+phi))) + C
+        voffset, vperiod, ejs, ec, d = paras
+        tmp = np.pi*(x-voffset)/vperiod
+        f01 = np.sqrt(8*ejs*ec*np.abs(np.cos(tmp))*np.sqrt(1+d**2*np.tan(tmp)**2))-ec
+        return np.sum((f01 - y)**2)
     def fitSpec2d(self,v,f,s,classify=False):
         v,f = self.profile(v,f,s,classify)
-        
         A, C, W, phi = self.fitCos(v,f)
-        print(A, C, W, phi)
-        mybounds = MyBounds(xmin=[0,0,0,0],xmax=[15*np.abs(A),np.inf,2.5*W,2*np.pi])
-        res = bh(self.err,[np.abs(A),C,2*W,phi],niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
-        A, C, W, phi = res.x
-        return f,v,A, C, W, phi
+        voffset, vperiod, ec, d = self.firstMax(v,f,num=0), 1/W, 0.2, 0
+        ejs = (np.max(f)+ec)**2/8/ec
+        p0 = [voffset, vperiod,ejs,ec,d]
+        print(p0)
+        mybounds = MyBounds(xmin=[-10,0,0,0,0],xmax=[10,1.5*vperiod,2*ejs,2*ec,10])
+        res = bh(self.err,p0,niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
+        # A, C, W, phi = res.x
+        voffset, vperiod, ejs, ec, d = res.x
+        return f, v, voffset, vperiod, ejs, ec, d
+
+################################################################################
+### 拟合腔频调制曲线
+################################################################################
+
+class Cavitymodulation_Fit(Spec2d_Fit):
+
+    def __init__(self,peak=15):
+        self.peak = peak
+    
+    def err(self,paras,x,y):
+        voffset, vperiod, ejs, ec, d, g, fc = paras
+        tmp = np.pi*(x-voffset)/vperiod
+        f01 = np.sqrt(8*ejs*ec*np.abs(np.cos(tmp))*np.sqrt(1+d**2*np.tan(tmp)**2))-ec
+        fr = (fc+f01+np.sqrt(4*g**2+(f01-fc)**2))/2
+        return np.sum((fr - y)**2)
+
+    def fitCavitymodulation(self,v,f,s,classify=False):
+        v,f = self.manipulation(v,f,s)
+        A, C, W, phi = self.fitCos(v,f)
+        voffset, vperiod, ec, d= self.firstMax(v,f,num=0), 1/W, 0.1*np.max(f), 0
+        ejs = (np.max(f)+ec)**2/8/ec
+        g, fc = ec, np.mean(f)
+        p0 = [voffset, vperiod, ejs, ec, d, g, fc]
+        print(p0)
+        mybounds = MyBounds(xmin=[-0.25*vperiod,0,0,0,0,0,0],xmax=[0.25*vperiod,1.5*vperiod,2*ejs,2*ec,2,2*g,2*fc])
+        res = bh(self.err,p0,niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
+        # A, C, W, phi = res.x
+        voffset, vperiod, ejs, ec, d, g, fc = res.x
+        return f,v,voffset, vperiod, ejs, ec, d, g, fc
 
 ################################################################################
 ### crosstalk直线拟合
