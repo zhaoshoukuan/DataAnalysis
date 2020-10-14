@@ -120,7 +120,9 @@ class RowToRipe():
         if method == 'welch':
             f, Pxx = signal.welch(y,fs,window=window,detrend=detrend,axis=axis,scaling=scaling,average=average)
         f, Pxx = (np.fft.fftshift(f), np.fft.fftshift(Pxx)) if shift else (f, Pxx)
-        return f, Pxx
+        index = np.argmax(Pxx,axis=axis)
+        w = f[index]
+        return w, f, Pxx
     
     def cross_psd(self,x,y,z,window='hann',detrend='constant',scaling='density',axis=-1,average='mean'):
         fs = (len(x)-1)/(np.max(x)-np.min(x))
@@ -155,12 +157,17 @@ class RowToRipe():
         return t, y
 
 
-    def fourier(self,x,y):
+    def fourier(self,x,y,axis=-1,shift=True):
+        y = signal.detrend(y,axis=axis)
         sample = (np.max(x) - np.min(x))/(len(x) - 1)
-        yt  = np.fft.fftshift(np.fft.fftfreq(len(y))) / sample
-        amp = np.fft.fftshift(np.fft.fft(y))
-        w = np.abs(yt[yt!=0][np.argmax(np.abs(amp[yt!=0]))])
-        return w, yt[yt!=0], np.abs(amp[yt!=0])
+        if shift:
+            yt  = np.fft.fftshift(np.fft.fftfreq(np.shape(y)[axis])) / sample
+            amp = np.fft.fftshift(np.fft.fft(y,axis=axis))
+        else:
+            yt  = np.fft.fftfreq(np.shape(y)[axis]) / sample
+            amp = np.fft.fft(y,axis=axis)
+        w = np.abs(yt[np.argmax(np.abs(amp),axis=axis)])
+        return w, yt, np.abs(amp)
         
     def envelope(self,y):
         mold, out, rc = 0, [], self.responsetime
@@ -195,6 +202,11 @@ class RowToRipe():
                 s = s[:,np.abs(s).max(axis=0)>peak]
                 v = v[np.abs(s).argmax(axis=0)]
         return v, f
+
+    def poly(self,x,y,num=1):
+        z = np.polyfit(x, y, num)
+        func = np.poly1d(z)
+        return z, func
 
 ################################################################################
 ### 拟合Exp函数
@@ -436,7 +448,7 @@ class Spec2d_Fit(Cos_Fit):
         ejs = (np.max(f)+ec)**2/8/ec
         p0 = [voffset, vperiod,ejs,ec,d]
         print(p0)
-        mybounds = MyBounds(xmin=[-10,0,0,0,0],xmax=[10,1.5*vperiod,2*ejs,2*ec,10])
+        mybounds = MyBounds(xmin=[0.5*voffset,0,0,0,0],xmax=[1.5*voffset,1.5*vperiod,2*ejs,2*ec,10])
         res = bh(self.err,p0,niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
         # A, C, W, phi = res.x
         voffset, vperiod, ejs, ec, d = res.x
@@ -561,17 +573,17 @@ class Vcrabi_fit():
         pass
     def err(self,paras,x,y):
         g, A0, Z0 = paras
-        return np.sum((np.sqrt(4*(g/2/np.pi)**2+A0**2*(x-Z0)**2)-y)**2)
+        return np.sum((np.sqrt(4*(g)**2+A0**2*(x-Z0)**2)-y)**2)
     def guess(self,x,y):
         Z0 = x[np.argmin(y)]
-        g = np.min(y)*np.pi
+        g = np.min(y)/2
         x, y = x[x!=Z0], y[x!=Z0]
-        A0 = np.mean(np.sqrt(y**2-4*(g/2/np.pi)**2)/(x-Z0))
+        A0 = np.mean(np.sqrt(y**2-4*(g)**2)/(x-Z0))
         return g, A0, Z0
     def fitVcrabi(self,x,y):
         p0 = self.guess(x,y)
-        print(p0)
-        res = bh(self.err,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
+        mybounds = MyBounds(xmin=[0,0,-1.1],xmax=[0.1,np.inf,1.1])
+        res = bh(self.err,p0,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)
         return res.x
 
 ################################################################################
