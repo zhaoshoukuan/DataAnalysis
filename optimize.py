@@ -11,12 +11,13 @@
 '''
 
 # here put the import lib
-import time, numpy as np
+import time, numpy as np, matplotlib.pyplot as plt
 from scipy import fftpack
 from sklearn.cluster import KMeans
 from scipy.optimize import least_squares as ls, curve_fit, basinhopping as bh
 from scipy import signal
-import asyncio
+import asyncio, scipy
+import qulab.dataTools as dt
 
 '''
 主要采用了全局优化的思想进行拟合
@@ -52,6 +53,10 @@ class RowToRipe():
             return len(d) + int(len(y)*0.1)
         else:
             return len(y)
+    
+    def errspace(self,func,paras,args):
+
+        return (func(args['x'],paras)-args['y'])**2
 
     def deductPhase(self,x,y):
         if np.ndim(y) != 2:
@@ -86,9 +91,9 @@ class RowToRipe():
         bias0 = round(x[index],5)
         return bias0
 
-    def smooth(self,y,f0=0.1):
+    def smooth(self,y,f0=0.1,axis=-1):
         b, a = signal.butter(3,f0)
-        z = signal.filtfilt(b,a,y)
+        z = signal.filtfilt(b,a,y,axis=axis)
         return z
 
     def resample(self,x,y,num=1001):
@@ -98,15 +103,21 @@ class RowToRipe():
         z = signal.resample_poly(y,up,down,padtype='line')
         return x_new, z
 
-    def findPeaks(self,y,width=0.02,f0=0.015,h=0.15,thresholf=None):
-        z = -y
+    def findPeaks(self,y,width=None,f0=0.015,h=0.15,threshold=None,prominence=None,plateau_size=None,rel_height=0):
+        detrend = np.mean(y - signal.detrend(y))
+        # mask = y > (np.max(y)+np.min(y))/2
+        z = y if np.max(y)-detrend>detrend-np.min(y) else -y
         background = self.smooth(z,f0=f0)
-        height = (np.max(z)-np.min(z))
-        height = (background+h*height,background+(1+h)*height)
-        threshold = threshold if threhold == None else threshold*height
-        property_peaks = signal.find_peaks(z,height=height,width=width,threshold=threshold)
-        index, prominences = property_peaks[0], property_peaks[1]['prominences']
-        return index, prominences
+        height0 = (np.max(z)-np.min(z))
+        height = (background+h*height0,background+(1+h)*height0)
+        threshold = threshold if threshold == None else threshold*height0
+        property_peaks = signal.find_peaks(z,height=height,threshold=threshold,plateau_size=plateau_size)
+        index = property_peaks[0]
+        half_widths = signal.peak_widths(z,index,rel_height=rel_height)
+        print(index,half_widths[0])
+        side = (index+int(half_widths[0]), index-int(half_widths[0]))
+        prominence = signal.peak_prominences(z,index)
+        return index, side, prominence
     
     def spectrum(self,x,y,method='normal',window='boxcar',detrend='constant',axis=-1,scaling='density',average='mean',shift=True):
         '''
@@ -160,6 +171,7 @@ class RowToRipe():
     def fourier(self,x,y,axis=-1,shift=True):
         y = signal.detrend(y,axis=axis)
         sample = (np.max(x) - np.min(x))/(len(x) - 1)
+        # sample = 100
         if shift:
             yt  = np.fft.fftshift(np.fft.fftfreq(np.shape(y)[axis])) / sample
             amp = np.fft.fftshift(np.fft.fft(y,axis=axis))
@@ -167,6 +179,7 @@ class RowToRipe():
             yt  = np.fft.fftfreq(np.shape(y)[axis]) / sample
             amp = np.fft.fft(y,axis=axis)
         w = np.abs(yt[np.argmax(np.abs(amp),axis=axis)])
+        # w = self.firstMax(yt,np.abs(amp),peakpercent=0.8)
         return w, yt, np.abs(amp)
         
     def envelope(self,y):
@@ -252,21 +265,25 @@ class Cos_Fit(RowToRipe):
     def __init__(self):
         pass
 
-    def errCos(self,paras,x,y):
-        A,C,W,phi = paras             
-        return  np.sum((A*np.cos(2*np.pi*W*x+phi)+C-y)**2)  
+    def func(self,x,paras):
+        A,C,W,phi = paras  
+        return A*np.cos(2*np.pi*W*x+phi)+C
+
+    def errCos(self,paras,x,y):             
+        return  np.sum((self.func(x,paras)-y)**2)  
 
     def guessCos(self,x,y):
         x, y = np.array(x), np.array(y)
-        sample = (np.max(x) - np.min(x))/(len(x) - 1)
-        Ag, Cg= np.max(y)-np.min(y), np.mean(y) 
-        yt  = np.fft.fftshift(np.fft.fftfreq(len(y))) / sample
-        amp = np.fft.fftshift(np.fft.fft(y))
+        # sample = (np.max(x) - np.min(x))/(len(x) - 1)
+        Ag, Cg= np.abs(y-np.mean(y)).max(), np.mean(y) 
+        # yt  = np.fft.fftshift(np.fft.fftfreq(len(y))) / sample
+        # amp = np.fft.fftshift(np.fft.fft(y))
+        Wg,yt,amp = RowToRipe().fourier(x, y)
         z = np.abs(amp[yt!=0])
         ytz = yt[yt!=0]
-        Wg = np.abs(ytz[np.argmax(z)])
-        phig =  np.mean(np.arccos((y[0] - Cg)/Ag) - 2*np.pi*Wg*x[0])
-        return Ag, Cg, Wg, phig
+        # Wg = np.abs(ytz[np.argmax(z)])
+        phig =  np.mean(np.arccos((y - Cg)/Ag) - 2*np.pi*Wg*x) % (2*np.pi)
+        return Ag, Cg, Wg, 0
 
     def fitCos(self,volt,s):
         x, y = volt, s
@@ -277,9 +294,10 @@ class Cos_Fit(RowToRipe):
         # print(Ag, Cg, Wg, phig)
         # res = ls(self.errCos, [Ag,Cg,Wg,phig], args=(x, y)) 
         mybounds = MyBounds(xmin=[-np.inf,-np.inf,0,-np.pi],xmax=[np.inf,np.inf,1.5*Wg,np.pi])    
-        res = bh(self.errCos,p0,niter=80,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)          
+        res = bh(self.errCos,p0,niter=80,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)   
+    
         A, C, W, phi = res.x
-        return A, C, W, phi
+        return res, self.func
 
 ################################################################################
 ### 拟合洛伦兹函数
@@ -298,12 +316,16 @@ class Lorentz_Fit(RowToRipe):
         return np.sum((a/(1.0+c*(x-b)**2)+d-y)**2)
 
     def guessLorentz(self,x,y):
+        # index, prominences, widths = self.findPeaks(y)
         z = np.sort(np.abs(y))
         d = np.mean(z[:int(len(z)/2)])
         y = np.abs(y)- d
         b = x[np.abs(y).argmax()]
+        # b1, b = x[index]
         bw = (np.max(x[y>0.5*(np.max(y)-np.min(y))])-np.min(x[y>0.5*(np.max(y)-np.min(y))]))/2
+        # bw1, bw = widths
         a = np.abs(y).max()
+        # a1, a = prominences
         c = 1 / bw**2
         return a,b,c,d
 
@@ -312,10 +334,10 @@ class Lorentz_Fit(RowToRipe):
             raise 'I hate the large number, please divided by 1e9, processing x in GHz'
         para = self.guessLorentz(x,y)
         # mybounds = MyBounds(xmin=[-np.inf,-np.inf,-np.inf,-np.inf,0,0],xmax=[np.inf,np.inf,np.inf,np.inf,1.5*w,2*np.pi])    
-        res = bh(self.errLorentz,para,niter=50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
+        res = bh(self.errLorentz,para,niter=20,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
         # res = ls(self.errLorentz,para,args=(x,y))
         a,b,c,d = res.x
-        return a,b,c,d,np.sqrt(np.abs(1/c))*2e3
+        return res,np.sqrt(np.abs(1/c))*2e3
 
 ################################################################################
 ### 拟合指数包络函数
@@ -351,9 +373,12 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         Ag, Cg, Wg, phig = self.guessCos(x,y)
         return A, B, T1, np.sqrt(np.abs(1/T2)), Wg, phig
 
-    def errT2(self,para,x,y):
+    def func(self,x,para):
         A,B,T1,T2,w,phi = para
-        return np.sum((A*np.exp(-(x/T2)**2-x/T1/2)*np.cos(2*np.pi*w*x+phi) + B - y)**2)
+        return A*np.exp(-(x/T2)**2-x/T1/2)*np.cos(2*np.pi*w*x+phi) + B
+
+    def errT2(self,para,x,y):
+        return np.sum((self.func(x,para) - y)**2)
 
     def fitT2(self,x,y):
         '''
@@ -376,7 +401,7 @@ class T2_Fit(Exp_Fit,Cos_Fit):
         mybounds = MyBounds(xmin=[0,-np.inf,100,10,0,-np.pi],xmax=[np.inf,np.inf,100000,100000,1.5*w,np.pi])    
         res = bh(self.errT2,p0,niter = 80,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)     
         A,B,T1,T2,w,phi = res.x
-        return A,B,T1,T2,w,phi,env
+        return res, self.func
 
 class Rabi_Fit(T2_Fit):
 
@@ -434,6 +459,11 @@ class Spec2d_Fit(Cos_Fit):
             s = s[s.max(axis=1)>self.peak]
             f = f[s.argmax(axis=1)]
         return v, f
+    def f01(self,x,paras):
+        voffset, vperiod, ejs, ec, d = paras
+        tmp = np.pi*(x-voffset)/vperiod
+        f01 = np.sqrt(8*ejs*ec*np.abs(np.cos(tmp))*np.sqrt(1+d**2*np.tan(tmp)**2))-ec
+        return f01
     def err(self,paras,x,y):
         # A, C, w, phi = paras
         # f01 = np.sqrt(A*np.abs(np.cos(w*x+phi))) + C
@@ -441,18 +471,31 @@ class Spec2d_Fit(Cos_Fit):
         tmp = np.pi*(x-voffset)/vperiod
         f01 = np.sqrt(8*ejs*ec*np.abs(np.cos(tmp))*np.sqrt(1+d**2*np.tan(tmp)**2))-ec
         return np.sum((f01 - y)**2)
-    def fitSpec2d(self,v,f,s,classify=False):
-        v,f = self.profile(v,f,s,classify)
-        A, C, W, phi = self.fitCos(v,f)
+
+    def fitSpec2d(self,v,f,s=None,classify=False):
+        if s is not None:
+            v,f = self.profile(v,f,s,classify)
+        paras, func = self.fitCos(v,f)
+        A, C, W, phi = paras.x
         voffset, vperiod, ec, d = self.firstMax(v,f,num=0), 1/W, 0.2, 0
         ejs = (np.max(f)+ec)**2/8/ec
         p0 = [voffset, vperiod,ejs,ec,d]
-        print(p0)
-        mybounds = MyBounds(xmin=[0.5*voffset,0,0,0,0],xmax=[1.5*voffset,1.5*vperiod,2*ejs,2*ec,10])
-        res = bh(self.err,p0,niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
-        # A, C, W, phi = res.x
-        voffset, vperiod, ejs, ec, d = res.x
-        return f, v, voffset, vperiod, ejs, ec, d
+
+        while 1:
+            # print(p0)
+            mybounds = MyBounds(xmin=[0.5*voffset,0,0,0,0],xmax=[1.5*voffset,1.5*vperiod,2*ejs,2*ec,10])
+            res = bh(self.err,p0,niter = 200,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
+            res = ls(self.err,res.x,args=(v, f)) 
+            voffset, vperiod, ejs, ec, d = res.x
+            space = self.errspace(self.f01,res.x,{'x':v,'y':f})
+            if np.max(space) > 0.001:
+                v = v[space<0.001]
+                f = f[space<0.001]
+                p0 = res.x
+                # print(len(v),(space<0.001))
+            else:
+                return f, v, voffset, vperiod, ejs, ec, d
+        # return f, v, voffset, vperiod, ejs, ec, d
 
 ################################################################################
 ### 拟合腔频调制曲线
@@ -462,27 +505,34 @@ class Cavitymodulation_Fit(Spec2d_Fit):
 
     def __init__(self,peak=15):
         self.peak = peak
-    
-    def err(self,paras,x,y):
+
+    def func(self,x,paras):
         voffset, vperiod, ejs, ec, d, g, fc = paras
         tmp = np.pi*(x-voffset)/vperiod
         f01 = np.sqrt(8*ejs*ec*np.abs(np.cos(tmp))*np.sqrt(1+d**2*np.tan(tmp)**2))-ec
         fr = (fc+f01+np.sqrt(4*g**2+(f01-fc)**2))/2
-        return np.sum((fr - y)**2)
+        # fr = fc - g**2/(f01-fc)
+        return fr
+
+    def err(self,paras,x,y):
+        return np.sum((self.func(x,paras) - y)**2)
 
     def fitCavitymodulation(self,v,f,s,classify=False):
         v,f = self.manipulation(v,f,s)
-        A, C, W, phi = self.fitCos(v,f)
-        voffset, vperiod, ec, d= self.firstMax(v,f,num=0), 1/W, 0.1*np.max(f), 0
+        paras, func = self.fitCos(v,f)
+        A, C, W, phi = paras.x
+        voffset, vperiod, ec, d= self.firstMax(v,f,num=0), 1/W, 0.1*np.min(f), 1
+        # g = np.min(f)-fc
         ejs = (np.max(f)+ec)**2/8/ec
         g, fc = ec, np.mean(f)
         p0 = [voffset, vperiod, ejs, ec, d, g, fc]
         print(p0)
         mybounds = MyBounds(xmin=[-0.25*vperiod,0,0,0,0,0,0],xmax=[0.25*vperiod,1.5*vperiod,2*ejs,2*ec,2,2*g,2*fc])
-        res = bh(self.err,p0,niter = 100,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds) 
+        res = bh(self.err,p0,niter = 200,minimizer_kwargs={"method":"Nelder-Mead","args":(v, f)},accept_test=mybounds)
+        # res = ls(self.err,res.x,args=(v, f)) 
         # A, C, W, phi = res.x
         voffset, vperiod, ejs, ec, d, g, fc = res.x
-        return f,v,voffset, vperiod, ejs, ec, d, g, fc
+        return f, v, res, self.func
 
 ################################################################################
 ### crosstalk直线拟合
@@ -539,30 +589,119 @@ class RB_Fit:
 ### 双指数拟合
 ################################################################################
 
+# class TwoExp_Fit(Exp_Fit):
+#     def __init__(self,funcname=None,percent=0.2):
+#         Exp_Fit.__init__(self,funcname)
+#         self.percent = percent
+#     def err(self,paras,x,y):
+#         a, b, c, d, e = paras
+#         return np.sum((a*np.exp(b*x) + c*np.exp(d*x) + e - y)**2)
+#     def guess(self,x,y):
+#         a,e,b = self.fitExp(x,y)
+#         b *= -1
+#         e = np.min(y) if a > 0 else np.max(y)
+#         return a,b,a*self.percent,b*self.percent,e
+#     def fitTwoexp(self,x,y):
+#         p0 = self.guess(x,y)
+#         a, b, c, d, e = p0
+#         lower = [0.95*i if i > 0 else 1.05*i for i in p0]
+#         higher = [1.05*i if i > 0 else 0.95*i for i in p0]
+#         lower[2], lower[3] = -np.abs(a)*self.percent, -np.abs(b)*self.percent
+#         higher[2], higher[3] = self.percent*np.abs(a), self.percent*np.abs(b)
+#         print(p0)
+#         # res = ls(self.err,p0,args=(x,y),bounds=(lower,higher))
+#         res = bh(self.err,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
+
+#         return res.x
+
 class TwoExp_Fit(Exp_Fit):
     def __init__(self,funcname=None,percent=0.2):
         Exp_Fit.__init__(self,funcname)
         self.percent = percent
+    def fitfunc(self,x,p):
+        return (p[0] + np.sum(p[1::2,None]*np.exp(-p[2::2,None]*x[None,:]), axis=0))
     def err(self,paras,x,y):
-        a, b, c, d, e = paras
-        return np.sum((a*np.exp(b*x) + c*np.exp(d*x) + e - y)**2)
-    def guess(self,x,y):
-        a,e,b = self.fitExp(x,y)
-        b *= -1
-        e = np.min(y) if a > 0 else np.max(y)
-        return a,b,a*self.percent,b*self.percent,e
-    def fitTwoexp(self,x,y):
-        p0 = self.guess(x,y)
-        a, b, c, d, e = p0
-        lower = [0.95*i if i > 0 else 1.05*i for i in p0]
-        higher = [1.05*i if i > 0 else 0.95*i for i in p0]
-        lower[2], lower[3] = -np.abs(a)*self.percent, -np.abs(b)*self.percent
-        higher[2], higher[3] = self.percent*np.abs(a), self.percent*np.abs(b)
-        print(p0)
-        # res = ls(self.err,p0,args=(x,y),bounds=(lower,higher))
+        return np.sum(((self.fitfunc(x,paras) - y)*(1.0+0.5*scipy.special.erf(0.4*(x-paras[2])))**5)**2)
+    def guess(self,x,y,paras):
+        offset = np.min(y)
+        alist = np.max(y) - np.min(y)
+        blist = np.max(x)-np.min(x)
+        paras[0] = offset
+        paras[1::2] = alist
+        paras[2::2] = 1/blist
+        return paras
+    def fitTwoexp(self,x,y,num=2):
+        paras = np.zeros((2*num+1,))
+        xmin, xmax = np.zeros((2*num+1,)), np.zeros((2*num+1,))
+        p0 = self.guess(x,y,paras)
+        xmin[0], xmax[0] = p0[0]*0.5, p0[0]*1.5
+        xmin[1::2], xmin[2::2] = p0[1::2]*0.5, -(np.max(x)-np.min(x))*2
+        xmax[1::2], xmax[2::2] = p0[1::2]*1.5, (np.max(x)-np.min(x))*2
+        mybounds = MyBounds(xmin=xmin,xmax=xmax)
         res = bh(self.err,p0,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)})
-
+        # res = bh(self.err,res.x,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)},accept_test=mybounds)
+        p0 = res.x
+        print(xmin)
+        # res = ls(self.err, p0, args=(np.array(x), np.array(y)))  
         return res.x
+
+################################################################################
+## 误差函数拟合
+################################################################################
+
+class Erf_fit(RowToRipe):
+    def __init__(self):
+        RowToRipe.__init__(self)
+    def func(self,x,paras):
+        sigma1, sigma2, center1, center2, a, b = paras
+        return a*(scipy.special.erf((x-center1)/sigma1)+np.abs(scipy.special.erf((x-center2)/sigma2)-1))+b
+    def err(self,paras,x,y):
+        return np.sum((y-self.func(x,paras))**2)
+    def guess(self,x,y):
+        height = np.max(y) - np.min(y)
+        mask = x[y < (np.max(y)+np.min(y))/2]
+        center1, center2 = mask[-1], mask[0]
+        b = np.mean(y - signal.detrend(y))
+        a = np.max(y) - np.min(y)
+        z, ynew = x[(np.min(y)+0.1*height)<y], y[(np.min(y)+0.1*height)<y]
+        z = z[ynew<(np.max(ynew)-0.1*height)]
+        sigma2 = (z[z<np.mean(z)][-1]-z[z<np.mean(z)][0])
+        sigma1 = (z[z>np.mean(z)][-1]-z[z>np.mean(z)][0])
+        return sigma1, sigma2, center1, center2, a, b
+    def fitErf(self,x,y):
+    
+        paras = self.guess(x,y)
+        # print(paras)
+        res = bh(self.err,paras,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)}) 
+        return res, self.func
+
+################################################################################
+## 拟合单个误差函数
+################################################################################
+
+class singleErf_fit(RowToRipe):
+    def __init__(self):
+        RowToRipe.__init__(self)
+    def func(self,x,paras):
+        sigma1, center1, a, b = paras
+        return a*scipy.special.erf((x-center1)/sigma1)+b
+    def err(self,paras,x,y):
+        return np.sum((y-self.func(x,paras))**2)
+    def guess(self,x,y):
+        mask = x[y < y.mean()]
+        center1 = mask[-1]
+        b = np.mean(y - signal.detrend(y))
+        a = np.max(y) - np.min(y)
+        z = np.abs(y - np.mean(y))
+        xnew = x[z<(np.max(z)+np.min(z))/2]
+        sigma1 = xnew[-1] - xnew[0]
+        return sigma1, center1, a, b
+    def fitErf(self,x,y):
+
+        paras = self.guess(x,y)
+        # print(paras)
+        res = bh(self.err,paras,niter = 50,minimizer_kwargs={"method":"Nelder-Mead","args":(x, y)}) 
+        return res, self.func
 
 ################################################################################
 ## 真空拉比拟合
@@ -639,3 +778,103 @@ class Cavity_fit(RowToRipe):
         f0, Qi, Qe, phi = res.x
         QL = 1 / (1 / Qi + 1 / Qe)
         return f0, Qi, Qe, QL, phi, f, s
+
+
+################################################################################
+## 执行拟合
+################################################################################
+
+def exeFit(measure,title,data,args):
+    qname = measure.qubitToread
+    if title == 'singlespec':
+        f_ss, s_ss = data[0], np.abs(data[1])
+        index = np.abs(s_ss).argmax(axis=0)
+        x,y= f_ss, s_ss
+        f_rabi = np.array([x[:,i][j] for i, j in enumerate(index)])
+        peak = np.array([y[:,i][j] for i, j in enumerate(index)])
+        # f_rabi, peak = [], []
+        # for i in range(np.shape(s_ss)[1]):
+        #     index, prominences, widths = RowToRipe().findPeaks(np.abs(y[:,i]))
+        #     f_rabi.append(x[:,i][index])
+        #     peak.append(np.abs(y[:,i])[index])
+        plt.figure()
+        plt.plot(x,np.abs(y),'-')
+        plt.plot(np.array(f_rabi).flatten(),np.array(peak).flatten(),'o')
+        plt.savefig(r'\\QND-SERVER2\skzhao\fig\%s.png'%(''.join((qname[0],'_',title))))
+        plt.close()
+        return {j: {'f_ex':f_rabi[i]} for i, j in enumerate(qname)}
+
+    if title == 'rabi_seq':
+        v_rp, s_rp = data[0], np.abs(data[1])
+        t_op, t_fit, peak = [], [], []
+        for i in range(np.shape(s_rp)[1]):
+            x, y = v_rp[:,i], np.abs(s_rp[:,i])
+            t = RowToRipe().firstMax(x,y,num=0,peakpercent=0.8)
+            peak.append(dt.nearest(x,t,y)[1])
+            t_op.append(t)
+        plt.figure()
+        plt.plot(v_rp,s_rp,'-')
+        plt.plot(t_op,peak,'o')
+        plt.savefig(r'\\QND-SERVER2\skzhao\fig\%s.png'%(''.join((qname[0],'_',title))))
+        plt.close()
+        return {j: {'amp':t_op[i]} for i, j in enumerate(qname)}
+
+    if title == 'Ramsey_seq':
+    
+        t_ram, s_ram = data[0], np.abs(data[1])
+        x, y = t_ram[:,0], s_ram[:,0]
+        res, func = T2_Fit(T1=30000,funcname='gauss',envelopemethod='hilbert').fitT2(x,np.abs(y))
+        A,B,T1,T2,w,phi = res.x
+        z = func(x,res.x)
+        z_env = A*np.exp(-(x/T2)**2-x/T1/2) + B
+        w,yt,amp = RowToRipe().fourier(x,y)
+        fig, axes = plt.subplots(ncols=2,nrows=1,figsize=(9,3))
+        axes[0].plot(t_ram,np.abs(s_ram),'-o',markersize=3)
+        axes[0].plot(x,z)
+        axes[0].plot(x,z_env)
+        axes[0].set_title('$T_{2}^{*}=%.2fns,\omega=%.2fMHz$'%(T2,w*1e3))
+        axes[1].plot(yt[yt!=0],np.abs(amp[yt!=0]))
+        plt.savefig(r'\\QND-SERVER2\skzhao\fig\%s.png'%(''.join((qname[0],'_',title))))
+        plt.close()
+        delta = 2e6-w*1e6
+        return {j: {'f_ex':measure.qubits[j].f_ex+delta} for i, j in enumerate(qname)}
+
+    if title == 'singleZpulse':
+        qubit = measure.qubits[qname[0]]
+        t_shift, s_z = data
+        plt.figure()
+        for i in range(np.shape(s_z)[1]):
+            x, y = t_shift[:,i], np.abs(s_z[:,i])
+            y0 = RowToRipe().smooth(y,f0=0.2)
+            res, func = Erf_fit().fitErf(x, y0)
+            paras = res.x
+            loc = (paras[2]+paras[3])/2
+            plt.plot(x,y,'-o',markersize=3)
+            plt.plot(x,func(x,paras))
+            plt.vlines(loc,np.min(y),np.max(y)) 
+        plt.savefig(r'\\QND-SERVER2\skzhao\fig\%s.png'%(''.join((qname[0],'_',title))))
+        plt.close()
+        zbigxy = loc-3000
+        qubit.timing['z>xy'] = (zbigxy*1e-9)
+        return {j: {'timing':qubit.timing} for i, j in enumerate(qname)}
+
+    if title == 'qqTiming':
+        qubit = measure.qubits[args['dcstate'][0]]
+        t_shift, s_z = data
+        plt.figure()
+        for i in range(np.shape(s_z)[1]):
+            x, y = t_shift[:,i], np.abs(s_z[:,i])
+            y0 = RowToRipe().smooth(y,f0=0.2)
+            res, func = singleErf_fit().fitErf(x, y0)
+            paras = res.x
+            loc = paras[1]
+            plt.plot(x,y,'-o',markersize=3)
+            plt.plot(x,func(x,paras))
+            plt.vlines(loc,np.min(y),np.max(y)) 
+        plt.savefig(r'\\QND-SERVER2\skzhao\fig\%s.png'%(''.join((args['dcstate'][0],'_',title))))
+        plt.close()
+        zbigxy = 1000-loc
+        print(zbigxy)
+        qubit.timing['read>xy'] -= (zbigxy*1e-9)
+        return {j: {'timing':qubit.timing} for i, j in enumerate(args['dcstate'])}
+
